@@ -1,0 +1,26 @@
+---
+title: "Jorgenson_BeesRCool"
+output: html_document
+date: "2025-11-05"
+---
+
+```{r}
+
+# 1. Topic: Habitat types and bee abundance
+
+# 2. Questions: How does bee abundance vary across Oregon? Are these patterns
+# related to the different types of habitat (e.g. forests, agriculture,
+# wetlands/grasslands, urban)? Are different bee species more attracted to
+# one habitat over another?
+# Challenge Question(s): Is there correlation between Bee abundance and
+# ecosystem/habitat health?
+# Could this be related to other factors such as agriculture, deforestation,
+# urbanization, etc.?
+
+# 3. Other possible data sets:
+# USGS National Land Cover Database (https://www.usgs.gov/centers/eros/science/nationalland-cover-database)
+# Oregon Statewide Habitat Map from Oregon Spatial Data Library
+# PRISM Climate Data from OSU (https://prism.oregonstate.edu/)
+
+```
+
