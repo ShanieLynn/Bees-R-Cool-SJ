@@ -1,0 +1,460 @@
+---
+title: "Final Write up"
+author: "Shanie Lynn Jorgenson"
+date: "2025-11-26"
+output: html_document
+---
+
+Introduction
+
+Bees offer important services that directly influence Oregon’s vast mosaic of ecosystems. Bees help to shape habitat structure by supporting plant reproduction, this in turn contributes to the shape and resilience of the ecosystem. Bee communities respond strongly to spatial heterogeneity in different landscapes and recent work sheds light on bee communities not being uniform across regions. Species instead differ in abundance, habitat affinity and distribution as environmental conditions change across the landscape (Christman et al., 2024). Studies have been done in the Pacific Northwest that give insight into how geographic gradients and habitat structure can aid in shaping bee populations. Patterns of species diversity in bumble bee communities among mountain ranges suggest climate and vegetation type shape bee dispersal and community turnover (Koch et al. 2017). These finding tell us that habitat conditions and land-use patterns collectively shape the structure of bee communities. Forest structure, succesional stages and disturbance history can support a variety of bee species. Still though, threats to bee community and ecosystem integrity remain. Bee diversity could decline dramatically following a timber harvest and remain low for decades (Zitomer et al., 2023). Forests of high density and closed canopies can reduce abundancy and connectivity between habitat patches (Gelles et al., 2023). This evidence points to the sensitivity of bee communities to vegetation structure or land-cover type. Despite the strong evidence that bee communities are shaped by specific habitat features there are limited studies explicitly linking bee communities to specific land-cover types across Oregon's ecoregions. Studies have examined regional bee diversity as well as landscape influences on diversity, but few have sought to quantify how species abundance and community composition vary across specific land-cover categories. Here I look into this relationship by taking a look at bees documented through the Oregon Bee Atlas (OBA) within the Cascade and Coastal ranges of Oregon. 
+Research like this matters because changing climate, land-cover and disturbance can restructure community composition and affect biodiversity and ecosystem function. Understanding how regional landscape differences influence bee diversity is essential for habitat and pollinator conservation as well as land use planning or forest management in Oregon.
+
+Questions: 
+How does bee abundance vary between the Coastal and Cascade regions?
+Is the dominant species for each region different?
+How do distributions vary across land-cover types for each region?
+
+Hypothesis: Land-cover differences influence bee abundance and species composition in each region. 
+
+Null hypothesis: Land-cover differences do not influence bee abundance and species composition in each region.
+
+```{r}
+
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(raster)
+library(RColorBrewer)
+library(sf)
+library(terra)
+library(ggplot2)
+library(vegan)
+
+```
+
+Data and Data Wrangling
+
+For this project I used 3 different data sets. The first was the OBA data, second was the USGS National Land Cover Database (NLCD), and finally Oregon ecoregion data. To be able to use this data I needed to be able to join all three data sets togather. I first started off with reading in the OBA .csv file then filtering through the bee data. I filtered out any records with missing species or location data. Next, I rastered the NLCD, and viewed the crs parameters. There were 20 land-cover types for the NLCD raster. I then organized the NLCD labels to their own table for easy use when creating legends for visuals. Finally, read in the ecoregion data as a shape file. From here I had to wrangle data in their own steps described in their coding chunks.
+
+Load and clean up the OBA data
+```{r}
+
+# OBA Data:
+oba <- read.csv("Data-sets/OBA_2018-2024.csv", stringsAsFactors = FALSE)
+
+oba <- oba %>% 
+  filter(!is.na(genus), !is.na(specificEpithet), # Filter out missing name data.
+         genus != "", specificEpithet != "") %>%
+  # Combine genus and specificEpithet columns.
+  mutate(GenusSpecies = paste(genus, specificEpithet, sep = " ")) %>%
+  # Filter out the columns I want to start with.
+  dplyr::select(day, month, year, genus, GenusSpecies, verbatimElevation, decimalLatitude, decimalLongitude) %>%
+  # Filter out lat and long bee data that are missing
+  filter(!is.na(decimalLatitude), !is.na(decimalLongitude)) %>%
+  mutate(verbatimElevation = as.numeric(verbatimElevation)) %>%
+  filter(verbatimElevation >= 0 & verbatimElevation <= 6000) 
+
+glimpse(oba)
+
+```
+
+Load raster data
+```{r}
+
+Cover2024_rast <- rast("~/Documents/Bees-R-Cool-SJ/Data-sets/NLCD/land-cover/2024_NLCD_LndCov_CU_C1V1_mi67k2ad1apaqe.tiff")
+
+summary(values(Cover2024_rast))
+
+crs(Cover2024_rast, proj = TRUE)
+
+nlcd_ID <- tribble(
+  ~landcover, ~NLCD_name,
+  11, "Open Water",
+  12, "Perennial Ice/Snow",
+  21, "Developed, Open Space",
+  22, "Developed, Low Intensity",
+  23, "Developed, Medium Intensity",
+  24, "Developed, High Intensity",
+  31, "Barren Land",
+  41, "Deciduous Forest",
+  42, "Evergreen Forest",
+  43, "Mixed Forest",
+  51, "Dwarf Scrub",
+  52, "Shrub/Scrub",
+  71, "Grassland/Herbaceous",
+  72, "Sedge/Herbaceous",
+  73, "Lichens",
+  74, "Moss",
+  81, "Pasture/Hay",
+  82, "Cultivated Crops",
+  90, "Woody Wetlands",
+  95, "Emergent Herbaceous Wetlands"
+)
+
+```
+
+Load Ecoregion data
+```{r}
+
+eco <- st_read("~/Documents/Bees-R-Cool-SJ/Data-sets/or_eco_l3/or_eco_l3.shp")
+
+crs(eco, proj = TRUE)
+
+colnames(eco)
+
+```
+
+
+```{r}
+
+# Convert oba to sf, set crs to NLCD raster
+oba_sf <- st_as_sf(oba, coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
+
+oba_sf <- st_transform(oba_sf, crs(Cover2024_rast))
+
+```
+
+
+```{r}
+
+# Splitting regions has to be done first due to large data file otherwise it wont load on my computer
+
+cascade <- eco %>%
+  filter(US_L3NAME %in% c("Cascades"))
+
+coast <- eco %>%
+  filter(US_L3NAME %in% c("Coast Range"))
+
+print(cascade)
+print(coast)
+
+crs(cascade, proj = TRUE)
+crs(coast, proj = TRUE)
+
+# Confirm you extraction of the proper regions
+unique(cascade$US_L3NAME) 
+unique(coast$US_L3NAME)
+
+```
+
+```{r}
+
+# reproject ecoregion data to crs of the raster file
+cascade_crs <- st_transform(cascade, crs(Cover2024_rast))
+coast_crs <- st_transform(coast, crs(Cover2024_rast))
+
+# mask to preserve cells and crop to the bounding region
+cascade_rast <- mask(crop(Cover2024_rast, vect(cascade_crs)), vect(cascade_crs))
+coast_rast <- mask(crop(Cover2024_rast, vect(coast_crs)), vect(coast_crs))
+
+crs(cascade_crs, proj = TRUE)
+crs(Cover2024_rast, proj = TRUE)
+
+```
+
+Turn regions into data.frames and change NLCD column name to a more manageable label.
+```{r}
+
+cascade_df <- as.data.frame(cascade_rast, xy = TRUE, na.rm = TRUE)
+coast_df   <- as.data.frame(coast_rast, xy = TRUE, na.rm = TRUE)
+
+cascade_df <- cascade_df %>%
+  rename(LndCov = `2024_NLCD_LndCov_CU_C1V1_mi67k2ad1apaqe`)
+coast_df <- coast_df %>%
+  rename(LndCov = `2024_NLCD_LndCov_CU_C1V1_mi67k2ad1apaqe`)
+
+colnames(cascade_df)
+colnames(coast_df)
+
+```
+
+
+```{r}
+
+# filter bee points for each ecoregion, meaning assign bee points to their lat/long that match the ecoregion data.
+oba_cascade <- oba_sf[cascade_crs, ]
+oba_coast <- oba_sf[coast_crs, ]
+
+names(oba_cascade)
+names(cascade)
+
+# Double check to make sure code worked as it should
+oba_cascade$GenusSpecies %in% 
+  oba_coast$GenusSpecies
+
+```
+
+
+Visualization Barplots and Maps
+
+```{r}
+
+# Filter the top 10 most abundant species since list is to long to realistically visualize and interpret
+top_cascade <- oba_cascade %>%
+  st_drop_geometry() %>%
+  count(GenusSpecies, sort = TRUE) %>%
+  slice_head(n = 10)
+
+top_casc_sf <- oba_cascade %>%
+  filter(GenusSpecies %in% top_cascade$GenusSpecies)
+
+# Bar plot of the top cascade bees (GenusSpecies)
+
+ggplot(top_cascade, aes(x = reorder(GenusSpecies, n), y = n, fill = GenusSpecies)) +
+  geom_col() +
+  scale_fill_brewer(palette = "BrBG") +
+  coord_flip() +
+  labs(title = "Cascades: Most Abundant",
+       x = "Species",
+       y = "Count") +
+  theme_minimal(base_size = 14) +
+  theme(panel.background = element_rect(fill = "lightgray"),
+        legend.position = "none",
+        axis.title.y = element_blank())
+
+```
+
+
+```{r}
+
+# Map of the Top 10 Cascade Bees
+
+ggplot() +
+  geom_sf(data = cascade_crs, fill = "gray", color = "black", linewidth = 0.3) +
+  geom_sf(data = top_casc_sf, aes(color = GenusSpecies), size = 0.5) + # adjust the size?
+  scale_color_brewer(palette = "Spectral") +
+  coord_sf() +
+  theme_minimal(base_size = 10) +
+  theme(legend.key.size = unit(0.3, "lines"),
+        legend.text = element_text(size = 6),
+        legend.box = "vertical",
+        legend.position = "right",
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) + 
+  guides(color = guide_legend(ncol = 1, keyheight = unit(0.3, "lines"))) +
+  ggtitle("Top 10 Cascade Species") +
+  labs(x = "Latitude", y = "Longitude", color = "Species")
+
+
+```
+
+
+```{r}
+
+# Filter the top 10 most abundant species since list is to long to realistically visualize and interpret
+top_coast <- oba_coast %>%
+  st_drop_geometry() %>%
+  count(GenusSpecies, sort = TRUE) %>%
+  slice_head(n = 10)
+
+top_coast_sf <- oba_coast %>%
+  filter(GenusSpecies %in% top_coast$GenusSpecies)
+
+# Bar plot of the top coast bees (GenusSpecies)
+ggplot(top_coast, aes(x = reorder(GenusSpecies, n), y = n, fill = GenusSpecies)) +
+  geom_col() +
+  scale_fill_brewer(palette = "BrBG") +
+  coord_flip() +
+  labs(title = "Coast: Most Abundant",
+       x = "Species",
+       y = "Count") +
+  theme_minimal(base_size = 14) +
+  theme(panel.background = element_rect(fill = "lightgray"),
+        legend.position = "none",
+        axis.title.y = element_blank())
+
+```
+
+plot coast w/ no raster
+```{r}
+
+# Map of the Top 10 Coast Bees
+
+ggplot() +
+  geom_sf(data = coast_crs, fill = "gray", color = "black", linewidth = 0.3) +
+  geom_sf(data = top_coast_sf, aes(color = GenusSpecies), size = 0.5) + # adjust the size?
+  scale_color_brewer(palette = "Spectral") +
+  coord_sf() +
+  theme_minimal(base_size = 10) +
+  theme(legend.key.size = unit(0.3, "lines"),
+        legend.text = element_text(size = 6),
+        legend.box = "vertical",
+        legend.position = "right",
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) + 
+  guides(color = guide_legend(ncol = 1, keyheight = unit(0.3, "lines"))) +
+  ggtitle("Top 10 Cascade Species") +
+  labs(x = "Latitude", y = "Longitude", color = "Species")
+
+```
+
+Now in order to look at the bee distributions per land-cover type I had to associate the bee data points with the NLCD raster data: meaning for each bee point I could determine what land-cover type it falls on.
+```{r}
+
+# Extract NLCD land cover for each bee point
+top_casc_sf$LndCov <- terra::extract(cascade_rast, vect(top_casc_sf))[,2]
+top_coast_sf$LndCov <- terra::extract(coast_rast, vect(top_coast_sf))[,2]
+
+```
+
+
+```{r}
+
+# Join NLCD legend names to each region
+top_casc_sf <- top_casc_sf %>%
+  left_join(nlcd_ID, by = c("LndCov" = "landcover"))
+
+top_coast_sf <- top_coast_sf %>%
+  left_join(nlcd_ID, by = c("LndCov" = "landcover"))
+
+```
+
+Summarize land cover data for each region and species
+```{r}
+
+## Counts of each bee species per land cover type
+
+# Cascade
+cascade_species_sum <- top_casc_sf %>%
+  st_drop_geometry() %>%          # remove spatial info for easy summarizing
+  group_by(NLCD_name, GenusSpecies) %>% 
+  summarise(count = n(), .groups = "drop")
+
+# Coast
+coast_species_sum <- top_coast_sf %>%
+  st_drop_geometry() %>%          
+  group_by(NLCD_name, GenusSpecies) %>%
+  summarise(count = n(), .groups = "drop")
+
+cascade_species_sum
+coast_species_sum
+
+```
+
+
+```{r}
+
+# Top abundant species by land cover (Cascades)
+
+ggplot(cascade_species_sum, aes(x = NLCD_name, y = count, fill = GenusSpecies)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "BrBG") +
+  theme_minimal() +
+  labs(title = "Top Abundant Species by Land Cover (Cascades)",
+       y = "Count", fill = "Species") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.background = element_rect(fill = "lightgray"),
+        legend.key.size = unit(0.3, "lines"),
+        axis.title.x = element_blank())
+
+```
+
+```{r}
+
+# Top abundant species by land cover (Coast)
+
+ggplot(coast_species_sum, aes(x = NLCD_name, y = count, fill = GenusSpecies)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "BrBG") +
+  theme_minimal() +
+  labs(title = "Top Abundant Species by Land Cover (Coast)",
+       x = "Land Cover Type",
+       y = "Count", fill = "Species") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.background = element_rect(fill = "lightgray"),
+        legend.key.size = unit(0.3, "lines"),
+        axis.title.x = element_blank())
+
+```
+
+
+Analysis/ Hypothesis Testing
+
+The purpose of the analysis was to test whether bee communities in the Cascade and Coast ranges differ in abundance and species composition. I wanted to know how these differences vary and correlate with different land-cover types across the two regions. 
+
+First, I measured Total Variation Distance (TVD)to look at how different the two distributions are. From my understanding this sums the differences in speciec abundance between the two regions. A TVD value of zero would mean that the distributions are identical. This gave me a value of 3311.5. 
+```{r}
+
+# key function: assign as tvd
+tvd <- function(dist1, dist2) {    # Total variation distance
+  sum(abs(dist1 - dist2)) / 2
+}
+
+# Compute observed TVD
+cascade_n <- oba_cascade %>%
+  st_drop_geometry() %>%
+  count(GenusSpecies, name = "cascade_count")
+
+coast_n <- oba_coast %>%
+  st_drop_geometry() %>%
+  count(GenusSpecies, name = "coast_count")
+
+species_df <- full_join(cascade_n, coast_n, by = "GenusSpecies") %>%
+  replace_na(list(cascade_count = 0, coast_count = 0))
+
+bee_tvd <- tvd(species_df$cascade_count, species_df$coast_count)
+
+bee_tvd
+
+```
+
+Second, I ran a Permutation-Based A/B Test. I think this is where I messed up on my poster, I ended up losing a lot of sleep over unforeseen circumstances and was so tired I managed to mix my values up rather than put both on there. Anywho, the A/B test would tell me if my TVD result was statistically significant. To do this I combined all bees from both regions and randomly reassigned them as Cascade or Coast and keeping the sample sizes constant. 
+```{r}
+
+set.seed(123)   # for reproducibility
+
+# Combine both regions into a single data set
+combined <- rbind(
+  oba_cascade %>% st_drop_geometry() %>% mutate(region = "cascade"),
+  oba_coast %>% st_drop_geometry() %>% mutate(region = "coast")
+)
+
+# Number of bees in each region (kept fixed during shuffling)
+n_cascade <- sum(combined$region == "cascade")
+n_coast   <- sum(combined$region == "coast")
+
+# Number of permutations
+n_perm <- 1000
+
+# Storage vector for permuted TVD values
+perm_tvd <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+
+  # Shuffle region labels
+  shuffled <- combined %>%
+    mutate(region = sample(region))   # randomly permutes cascade/coast labels
+  
+  # Recalculate species counts for each shuffled region
+  cascade_shuffled <- shuffled %>%
+    filter(region == "cascade") %>%
+    count(GenusSpecies, name = "cascade_count")
+
+  coast_shuffled <- shuffled %>%
+    filter(region == "coast") %>%
+    count(GenusSpecies, name = "coast_count")
+
+  # Joined so that missing species get zeros
+  shuffled_join <- full_join(cascade_shuffled, coast_shuffled, by = "GenusSpecies") %>%
+    replace_na(list(cascade_count = 0, coast_count = 0))
+
+  # Compute permuted TVD
+  perm_tvd[i] <- tvd(shuffled_join$cascade_count, shuffled_join$coast_count)
+}
+
+# Show permutation-based p-value
+p_value <- (sum(perm_tvd >= bee_tvd) + 1) / (n_perm + 1)
+p_value
+
+```
+
+Conclusion
+
+The statistical findings support the hypothesis as well as ecological patterns suggested by previous research. The tvd value of 3311.5 indicates the two regions do not share similar species abundance and the result also supports the expectation that land-cover differences and regional conditions shape bee communities. Additionally, the A/B test p-value < 0.001 indicates that the observed results are unlikely due to chance, that the TVD result is extremely unlikely under the null hypothesis.
+
+References
+
+Christman, M. E., Spears, L. R., Burchfield, E. K., Pearse, W. D., Strange, J. P., & Ramirez, R. A. (2024). Bumble bee responses to climate and landscapes: Investigating habitat associations and species assemblages across geographic regions in the United States of America. Global Change Biology, 30(6).
+Zitomer, R. A., Galbraith, S. M., Betts, M. G., Moldenke, A. R., Progar, R. A., & Rivers, J. W. (2023). Bee diversity decreases rapidly with time since harvest in intensively managed conifer forests. Ecological Applications, 33(5).
+Koch, J. B., Looney, C., Sheppard, W. S., & Strange, J. P. (2017). Patterns of population genetic structure and diversity across bumble bee communities in the Pacific Northwest. Conserv Genet, 3, 507–520. 
+Gelles, R. V., Davis, T. S., & Barrett, K. J. (2023). Prescribed fire is associated with increased floral richness and promotes short-term increases in bee biodiversity in the ponderosa pine forest of the Southern Rocky Mountains. Agricultural and Forest Entomology, 25(3), 435–448. 
+
